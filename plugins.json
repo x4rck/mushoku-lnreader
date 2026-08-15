@@ -1,0 +1,11 @@
+[
+  {
+    "id": "mushokuTenseiRuDates",
+    "name": "Mushoku Tensei RU",
+    "site": "https://ranobehub.org",
+    "lang": "ru",
+    "version": "1.0.0",
+    "url": "https://raw.githubusercontent.com/x4rck/mushoku-lnreader/main/index.js",
+    "iconUrl": "https://ranobehub.org/favicon.ico"
+  }
+]
