@@ -7,11 +7,9 @@ class MushokuTenseiRuPlugin {
     this.id = 'mushokuTenseiRuDates';
     this.name = 'Mushoku Tensei RU';
     this.site = 'https://ranobehub.org';
-    this.version = '1.0.1';
+    this.version = '1.2.0';
     this.icon = '';
-
-    this.chapterListUrl =
-      'https://raw.githubusercontent.com/x4rck/mushoku-lnreader/main/chapters.html';
+    this.novelId = '1246';
 
     this.imageRequestInit = {
       headers: {
@@ -25,13 +23,7 @@ class MushokuTenseiRuPlugin {
       return [];
     }
 
-    return [
-      {
-        name: 'Реинкарнация Безработного (ЛН)',
-        path: '/ranobe/mushoku-tensei-ln',
-        cover: defaultCover,
-      },
-    ];
+    return [this.getNovelItem()];
   }
 
   async searchNovels(searchTerm, pageNo) {
@@ -47,76 +39,104 @@ class MushokuTenseiRuPlugin {
       q.includes('реинкар') ||
       q.includes('безработ')
     ) {
-      return [
-        {
-          name: 'Реинкарнация Безработного (ЛН)',
-          path: '/ranobe/mushoku-tensei-ln',
-          cover: defaultCover,
-        },
-      ];
+      return [this.getNovelItem()];
     }
 
     return [];
   }
 
-  async getChapters() {
-    const html = await fetchText(this.chapterListUrl);
+  getNovelItem() {
+    return {
+      name: 'Реинкарнация Безработного (ЛН)',
+      path: this.novelId,
+      cover: defaultCover,
+    };
+  }
 
-    if (!html) {
-      throw new Error('Не удалось загрузить chapters.html');
-    }
-
-    const $ = load(html);
-    const chapters = [];
-
-    $('a.chapter-row').each((index, element) => {
-      const chapter = $(element);
-
-      const title = chapter
-        .find('[data-chapter-transition-title="true"]')
-        .first()
-        .text()
-        .trim();
-
-      const path = chapter.attr('href');
-
-      const releaseTime = chapter
-        .find('time[datetime]')
-        .first()
-        .attr('datetime');
-
-      if (!title || !path) {
-        return;
-      }
-
-      chapters.push({
-        name: title,
-        path: path,
-        releaseTime: releaseTime || undefined,
-        chapterNumber: index + 1,
-      });
+  async fetchJson(path) {
+    const url = this.absoluteUrl(path);
+    const body = await fetchText(url, {
+      headers: {
+        Accept: 'application/json',
+        Referer: 'https://ranobehub.org/',
+      },
     });
 
-    if (chapters.length !== 408) {
-      throw new Error(
-        `Ожидалось 408 глав, получено ${chapters.length}`
-      );
+    if (!body) {
+      throw new Error(`Не удалось загрузить ${url}`);
+    }
+
+    return JSON.parse(body);
+  }
+
+  stripHtml(html) {
+    return String(html || '')
+      .replace(/<br\s*\/?>/gi, '\n')
+      .replace(/<\/p>/gi, '\n\n')
+      .replace(/<[^>]+>/g, '')
+      .replace(/\n{3,}/g, '\n\n')
+      .trim();
+  }
+
+  async getChapters() {
+    const { volumes } = await this.fetchJson(
+      `/api/ranobe/${this.novelId}/contents`
+    );
+
+    const chapters = [];
+
+    for (const volume of volumes || []) {
+      if (!volume.chapters?.length) {
+        continue;
+      }
+
+      for (const chapter of volume.chapters) {
+        chapters.push({
+          name: `Том ${volume.num} — ${chapter.name}`,
+          path: `${this.novelId}/${volume.num}/${chapter.num}`,
+          releaseTime: chapter.changed_at
+            ? new Date(
+                parseInt(chapter.changed_at, 10) * 1000
+              ).toISOString()
+            : undefined,
+          chapterNumber: chapters.length + 1,
+        });
+      }
+    }
+
+    if (!chapters.length) {
+      throw new Error('Список глав пуст');
     }
 
     return chapters;
   }
 
   async parseNovel(novelPath) {
-    const chapters = await this.getChapters();
+    const [{ data }, chapters] = await Promise.all([
+      this.fetchJson(`/api/ranobe/${this.novelId}`),
+      this.getChapters(),
+    ]);
+
+    const authors = (data.authors || [])
+      .map(author => author.name_eng)
+      .filter(Boolean);
+
+    const genres = [data.tags?.genres, data.tags?.events]
+      .flat()
+      .map(tag => tag?.names?.rus || tag?.names?.eng || tag?.title)
+      .filter(Boolean);
 
     return {
-      name: 'Реинкарнация Безработного (ЛН)',
-      path: novelPath,
-      cover: defaultCover,
-      author: 'Rifujin na Magonote',
-      artist: 'Shirotaka',
+      name: data.names?.rus || data.names?.eng || 'Реинкарнация Безработного (ЛН)',
+      path: novelPath || this.novelId,
+      cover: data.posters?.medium || defaultCover,
+      author: authors[0] || 'Rifujin na Magonote',
+      artist: authors[2] || 'Shirotaka',
       summary:
+        this.stripHtml(data.description) ||
         'Mushoku Tensei: Isekai Ittara Honki Dasu. Русский перевод.',
+      genres: genres.length ? genres.join(', ') : undefined,
+      status: data.status?.title,
       chapters,
     };
   }
@@ -145,11 +165,14 @@ class MushokuTenseiRuPlugin {
     root.find('img').each((_, element) => {
       const image = $(element);
 
+      const mediaId = image.attr('data-media-id');
+
       const src =
         image.attr('src') ||
         image.attr('data-src') ||
         image.attr('data-lazy-src') ||
-        image.attr('data-original');
+        image.attr('data-original') ||
+        (mediaId ? `/api/media/${mediaId}` : '');
 
       if (src) {
         image.attr('src', this.absoluteUrl(src));
@@ -159,56 +182,61 @@ class MushokuTenseiRuPlugin {
       image.removeAttr('data-src');
       image.removeAttr('data-lazy-src');
       image.removeAttr('data-original');
+      image.removeAttr('data-media-id');
     });
   }
 
   findChapterContent($) {
     const selectors = [
+      '.ai-reader-content-frame .reader-content',
+      '.ai-reader-content-frame',
+      '.reader-content',
       '[data-chapter-content]',
       '[data-reader-content]',
       '.chapter-content',
       '.chapter-text',
-      '.reader-content',
       '.reader-body',
       '.chapter-page__content',
       '.text-container',
-      'article',
     ];
 
     for (const selector of selectors) {
       const element = $(selector).first();
 
-      if (
-        element.length &&
-        element.text().replace(/\s+/g, ' ').trim().length > 300
-      ) {
+      if (!element.length) {
+        continue;
+      }
+
+      const textLength = element
+        .text()
+        .replace(/\s+/g, ' ')
+        .trim().length;
+      const imageCount = element.find('img').length;
+
+      if (textLength > 100 || imageCount > 0) {
         return element;
       }
     }
 
-    /*
-     * Fallback на случай изменения классов RanobeHub.
-     * Ищем самый большой текстовый блок.
-     */
     let best = null;
     let bestScore = 0;
 
-    $('main div, main section, article, [role="main"] div').each(
+    $('.reader-paper div, main div, main section, article').each(
       (_, element) => {
         const node = $(element);
+
+        if (node.hasClass('reader-shell')) {
+          return;
+        }
 
         const textLength = node
           .text()
           .replace(/\s+/g, ' ')
           .trim().length;
-
         const paragraphCount = node.find('p').length;
         const imageCount = node.find('img').length;
-
         const score =
-          textLength +
-          paragraphCount * 100 +
-          imageCount * 30;
+          textLength + paragraphCount * 100 + imageCount * 30;
 
         if (textLength > 500 && score > bestScore) {
           bestScore = score;
@@ -221,12 +249,14 @@ class MushokuTenseiRuPlugin {
   }
 
   async parseChapter(chapterPath) {
-    const url = this.absoluteUrl(chapterPath);
+    const path = String(chapterPath || '').replace(/^\/+/, '');
+    const url = path.startsWith('ranobe/')
+      ? this.absoluteUrl(path)
+      : this.resolveUrl(path);
 
     const html = await fetchText(url, {
       headers: {
-        Referer:
-          'https://ranobehub.org/ranobe/mushoku-tensei-ln',
+        Referer: `https://ranobehub.org/ranobe/${this.novelId}`,
         Accept:
           'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
       },
@@ -241,7 +271,6 @@ class MushokuTenseiRuPlugin {
     }
 
     const $ = load(html);
-
     const root = this.findChapterContent($);
 
     if (!root || !root.length) {
@@ -267,6 +296,8 @@ class MushokuTenseiRuPlugin {
           '[class*="toolbar"]',
           '[class*="reaction"]',
           '[class*="discussion"]',
+          '[class*="engagement"]',
+          '[class*="reader-ad"]',
         ].join(',')
       )
       .remove();
@@ -277,7 +308,7 @@ class MushokuTenseiRuPlugin {
   }
 
   resolveUrl(path) {
-    return this.absoluteUrl(path);
+    return this.absoluteUrl('ranobe/' + String(path || '').replace(/^\/+/, ''));
   }
 }
 
