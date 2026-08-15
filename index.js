@@ -7,9 +7,12 @@ class MushokuTenseiRuPlugin {
     this.id = 'mushokuTenseiRuDates';
     this.name = 'Mushoku Tensei RU';
     this.site = 'https://ranobehub.org';
-    this.version = '1.2.0';
+    this.version = '1.2.1';
     this.icon = '';
     this.novelId = '1246';
+    this.novelPath = '/ranobe/mushoku-tensei-ln';
+    this.chapterPathPrefix =
+      '/ranobe/1246-jobless-reincarnation-it-will-be-all-out-if-i-go-to-a/chapter';
 
     this.imageRequestInit = {
       headers: {
@@ -48,7 +51,7 @@ class MushokuTenseiRuPlugin {
   getNovelItem() {
     return {
       name: 'Реинкарнация Безработного (ЛН)',
-      path: this.novelId,
+      path: this.novelPath,
       cover: defaultCover,
     };
   }
@@ -84,6 +87,7 @@ class MushokuTenseiRuPlugin {
     );
 
     const chapters = [];
+    const seenChapterIds = new Set();
 
     for (const volume of volumes || []) {
       if (!volume.chapters?.length) {
@@ -91,9 +95,15 @@ class MushokuTenseiRuPlugin {
       }
 
       for (const chapter of volume.chapters) {
+        if (!chapter.id || seenChapterIds.has(chapter.id)) {
+          continue;
+        }
+
+        seenChapterIds.add(chapter.id);
+
         chapters.push({
           name: `Том ${volume.num} — ${chapter.name}`,
-          path: `${this.novelId}/${volume.num}/${chapter.num}`,
+          path: `${this.chapterPathPrefix}/${chapter.id}`,
           releaseTime: chapter.changed_at
             ? new Date(
                 parseInt(chapter.changed_at, 10) * 1000
@@ -128,7 +138,7 @@ class MushokuTenseiRuPlugin {
 
     return {
       name: data.names?.rus || data.names?.eng || 'Реинкарнация Безработного (ЛН)',
-      path: novelPath || this.novelId,
+      path: novelPath || this.novelPath,
       cover: data.posters?.medium || defaultCover,
       author: authors[0] || 'Rifujin na Magonote',
       artist: authors[2] || 'Shirotaka',
@@ -249,14 +259,11 @@ class MushokuTenseiRuPlugin {
   }
 
   async parseChapter(chapterPath) {
-    const path = String(chapterPath || '').replace(/^\/+/, '');
-    const url = path.startsWith('ranobe/')
-      ? this.absoluteUrl(path)
-      : this.resolveUrl(path);
+    const url = this.absoluteUrl(chapterPath);
 
     const html = await fetchText(url, {
       headers: {
-        Referer: `https://ranobehub.org/ranobe/${this.novelId}`,
+        Referer: this.absoluteUrl(this.novelPath),
         Accept:
           'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
       },
@@ -308,7 +315,7 @@ class MushokuTenseiRuPlugin {
   }
 
   resolveUrl(path) {
-    return this.absoluteUrl('ranobe/' + String(path || '').replace(/^\/+/, ''));
+    return this.absoluteUrl(path);
   }
 }
 
